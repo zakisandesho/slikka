@@ -53,6 +53,20 @@ def main():
         help="Layer to show (default: 0).",
     )
 
+    # backup
+    backup_p = sub.add_parser("backup", help="Save full keymap to a JSON file.")
+    backup_p.add_argument(
+        "file", nargs="?", default=None,
+        help="Output file (default: keymap_YYYYMMDD_HHMMSS.json).",
+    )
+
+    # restore
+    restore_p = sub.add_parser("restore", help="Restore keymap from a JSON file.")
+    restore_p.add_argument(
+        "file", type=str,
+        help="JSON backup file to restore from.",
+    )
+
     # set
     set_p = sub.add_parser("set", help="Set a key by position number.")
     set_p.add_argument(
@@ -83,6 +97,10 @@ def main():
             run_map(args)
         elif args.command == "set":
             run_set(args)
+        elif args.command == "backup":
+            run_backup(args)
+        elif args.command == "restore":
+            run_restore(args)
         else:
             run_show(args)
     except KeyboardNotFoundError as e:
@@ -199,6 +217,86 @@ def run_set(args):
         print(f"  Wrote: 0x{keycode:04X} ({decode_keycode(keycode)})", file=sys.stderr)
         print(f"  Read:  0x{verify_kc:04X} ({new_name})", file=sys.stderr)
         sys.exit(1)
+
+
+def run_backup(args):
+    import json
+    from datetime import datetime
+    from .keycodes import decode_keycode
+
+    filename = args.file
+    if filename is None:
+        filename = f"keymap_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+
+    print("Connecting to keyboard...")
+    with VialKeyboard(vid=args.vid, pid=args.pid) as kb:
+        layer_count = kb.get_layer_count()
+        print(f"Reading keymap ({layer_count} layers)...")
+        keymap = kb.get_keymap(rows=10, cols=6, layers=layer_count)
+
+    # Build backup data with raw codes + human-readable names
+    layers = []
+    for layer_data in keymap:
+        layer_rows = []
+        for row in layer_data:
+            layer_rows.append([
+                {"code": kc, "name": decode_keycode(kc)} for kc in row
+            ])
+        layers.append(layer_rows)
+
+    backup = {
+        "vid": f"0x{args.vid:04X}",
+        "pid": f"0x{args.pid:04X}",
+        "timestamp": datetime.now().isoformat(),
+        "rows": 10,
+        "cols": 6,
+        "layer_count": layer_count,
+        "keymap": layers,
+    }
+
+    with open(filename, "w") as f:
+        json.dump(backup, f, indent=2)
+
+    print(f"Saved {layer_count} layers to {filename}")
+
+
+def run_restore(args):
+    import json
+    from .keycodes import decode_keycode
+
+    with open(args.file) as f:
+        backup = json.load(f)
+
+    layer_count = backup["layer_count"]
+    rows = backup["rows"]
+    cols = backup["cols"]
+    keymap = backup["keymap"]
+
+    print(f"Restoring from {args.file} ({layer_count} layers)...")
+    print("Connecting to keyboard...")
+    with VialKeyboard(vid=args.vid, pid=args.pid) as kb:
+        kb_layers = kb.get_layer_count()
+        if layer_count > kb_layers:
+            print(f"Warning: backup has {layer_count} layers but keyboard has {kb_layers}.",
+                  file=sys.stderr)
+            print(f"Restoring first {kb_layers} layers only.", file=sys.stderr)
+            layer_count = kb_layers
+
+        total = layer_count * rows * cols
+        done = 0
+        for layer_idx in range(layer_count):
+            for row_idx in range(rows):
+                for col_idx in range(cols):
+                    entry = keymap[layer_idx][row_idx][col_idx]
+                    kc = entry["code"]
+                    kb.set_keycode(layer_idx, row_idx, col_idx, kc)
+                    done += 1
+            pct = done * 100 // total
+            sys.stderr.write(f"\r  Writing... {pct}% (layer {layer_idx}/{layer_count})")
+            sys.stderr.flush()
+        sys.stderr.write("\r  Writing... done!              \n")
+
+    print(f"Restored {layer_count} layers.")
 
 
 if __name__ == "__main__":
