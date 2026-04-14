@@ -134,3 +134,138 @@ def decode_keycode(kc: int) -> str:
         return f"USER_{kc & 0xFF}"
 
     return f"0x{kc:04X}"
+
+
+# ---------------------------------------------------------------------------
+# Encoding: name -> 16-bit keycode (inverse of decode_keycode)
+# ---------------------------------------------------------------------------
+
+import re
+
+# Reverse lookup tables (built once at import time)
+_NAME_TO_BASIC: dict[str, int] = {}
+for _code, _name in BASIC_KEYCODES.items():
+    _upper = _name.upper()
+    _NAME_TO_BASIC[_upper] = _code
+    if _upper.startswith("KC_"):
+        _NAME_TO_BASIC[_upper[3:]] = _code
+    else:
+        _NAME_TO_BASIC[f"KC_{_upper}"] = _code
+
+_NAME_TO_SPECIAL: dict[str, int] = {}
+for _code, _name in SPECIAL_KEYCODES.items():
+    _NAME_TO_SPECIAL[_name.upper()] = _code
+
+# Modifier abbreviations -> 5-bit modifier field
+_MOD_BITS = {
+    "LC": 0x01, "LCTL": 0x01,
+    "LS": 0x02, "LSFT": 0x02,
+    "LA": 0x04, "LALT": 0x04,
+    "LG": 0x08, "LGUI": 0x08,
+    "RC": 0x11, "RCTL": 0x11,
+    "RS": 0x12, "RSFT": 0x12,
+    "RA": 0x14, "RALT": 0x14, "ALTGR": 0x14,
+    "RG": 0x18, "RGUI": 0x18,
+}
+
+
+def _encode_mods(mod_str: str) -> int:
+    """Parse a modifier string like 'LC+LS' into a 5-bit modifier field."""
+    bits = 0
+    for part in mod_str.split("+"):
+        part = part.strip().upper()
+        if part not in _MOD_BITS:
+            raise ValueError(f"Unknown modifier: {part}")
+        bits |= _MOD_BITS[part]
+    return bits
+
+
+def _resolve_basic(name: str) -> int:
+    """Resolve a basic keycode name to its 8-bit code."""
+    upper = name.strip().upper()
+    if upper in _NAME_TO_BASIC:
+        return _NAME_TO_BASIC[upper]
+    raise ValueError(f"Unknown basic keycode: {name}")
+
+
+def encode_keycode(name: str) -> int:
+    """Encode a keycode name string to a 16-bit QMK keycode.
+
+    Supported formats (case-insensitive):
+      Basic:       A, ESC, BSPC, F1, KC_A, KC_ESC
+      Special:     CW_TOG, QK_BOOT, QK_LLCK
+      Layer fn:    MO(2), TG(3), TO(1), DF(2), OSL(3), TT(4), PDF(1)
+      Layer tap:   LT3(A), LT0(ESC)
+      Mod tap:     MT(LC,ESC), MT(LC+LS,A)
+      Mod combo:   LC(C), LS(A), LA(TAB), LC+LS(ESC)
+      One-shot:    OSM(LS), OSM(LC+LS)
+      Transparent: TRNS, KC_TRNS
+      No key:      KC_NO
+      Raw hex:     0x1234
+    """
+    s = name.strip().upper()
+
+    # Raw hex
+    if s.startswith("0X"):
+        val = int(s, 16)
+        if not (0 <= val <= 0xFFFF):
+            raise ValueError(f"Hex keycode out of 16-bit range: {name}")
+        return val
+
+    # Special keycodes (exact match)
+    if s in _NAME_TO_SPECIAL:
+        return _NAME_TO_SPECIAL[s]
+
+    # Basic keycodes (exact match, with or without KC_ prefix)
+    if s in _NAME_TO_BASIC:
+        return _NAME_TO_BASIC[s]
+
+    # Layer functions: MO(n), TG(n), TO(n), DF(n), OSL(n), TT(n), PDF(n)
+    m = re.fullmatch(r'(MO|TG|TO|DF|OSL|TT|PDF)\((\d+)\)', s)
+    if m:
+        func, layer = m.group(1), int(m.group(2))
+        if layer > 31:
+            raise ValueError(f"Layer number out of range (0-31): {layer}")
+        bases = {
+            'TO': 0x5000, 'MO': 0x5100, 'DF': 0x5200,
+            'PDF': 0x5220, 'TG': 0x5300, 'OSL': 0x5400, 'TT': 0x5600,
+        }
+        return bases[func] | layer
+
+    # One-shot mod: OSM(mods)
+    m = re.fullmatch(r'OSM\(([^)]+)\)', s)
+    if m:
+        return 0x5500 | _encode_mods(m.group(1))
+
+    # Layer tap: LTn(key)
+    m = re.fullmatch(r'LT(\d+)\(([^)]+)\)', s)
+    if m:
+        layer = int(m.group(1))
+        if layer > 15:
+            raise ValueError(f"Layer tap layer out of range (0-15): {layer}")
+        return 0x4000 | (layer << 8) | _resolve_basic(m.group(2))
+
+    # Mod tap: MT(mods, key)
+    m = re.fullmatch(r'MT\(([^,]+),\s*([^)]+)\)', s)
+    if m:
+        return 0x2000 | (_encode_mods(m.group(1)) << 8) | _resolve_basic(m.group(2))
+
+    # Modifier combos: LC(key), LS+LA(key), etc.
+    m = re.fullmatch(r'([A-Z+]+)\(([^)]+)\)', s)
+    if m:
+        mod_str, key_str = m.group(1), m.group(2)
+        try:
+            mod_bits = _encode_mods(mod_str)
+        except ValueError:
+            raise ValueError(
+                f"Unknown keycode: {name}. "
+                "Use a key name (A, ESC), function (MO(2), LT1(A)), "
+                "modifier combo (LC(C)), or hex (0x1234)."
+            )
+        return (mod_bits << 8) | _resolve_basic(key_str)
+
+    raise ValueError(
+        f"Unknown keycode: {name}. "
+        "Use a key name (A, ESC), function (MO(2), LT1(A)), "
+        "modifier combo (LC(C)), or hex (0x1234)."
+    )

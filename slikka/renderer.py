@@ -89,6 +89,69 @@ def render_layer(keys: list[Key], keymap_layer: list[list[int]], layer_num: int)
     return "\n".join(lines)
 
 
+def render_map(keys: list[Key], keymap_layer: list[list[int]], layer_num: int) -> str:
+    """Render a layer showing position numbers and current keycodes.
+
+    Each key box shows the position number (#N) on top and the keycode below.
+    """
+    MAP_CELL_H = 4  # taller boxes: border, position, keycode, border
+
+    max_x = max(k.x + k.w for k in keys)
+    max_y = max(k.y + k.h for k in keys)
+    grid_w = int(round(max_x * CELL_W)) + 2
+    grid_h = int(round(max_y * MAP_CELL_H)) + 2
+
+    grid = [[" "] * grid_w for _ in range(grid_h)]
+
+    for idx, key in enumerate(keys):
+        kc = keymap_layer[key.row][key.col]
+        kc_name = decode_keycode(kc)
+        pos_label = f"#{idx}"
+
+        px = int(round(key.x * CELL_W))
+        py = int(round(key.y * MAP_CELL_H))
+        pw = int(round(key.w * CELL_W))
+        ph = int(round(key.h * MAP_CELL_H))
+
+        if px < 0 or py < 0 or px + pw > grid_w or py + ph > grid_h:
+            continue
+
+        inner_w = pw - 2
+
+        # Box borders
+        grid[py][px] = TL
+        for i in range(1, pw - 1):
+            grid[py][px + i] = HZ
+        grid[py][px + pw - 1] = TR
+        grid[py + ph - 1][px] = BL
+        for i in range(1, pw - 1):
+            grid[py + ph - 1][px + i] = HZ
+        grid[py + ph - 1][px + pw - 1] = BR
+        for j in range(1, ph - 1):
+            grid[py + j][px] = VT
+            grid[py + j][px + pw - 1] = VT
+
+        # Line 1: position number
+        display_pos = pos_label[:inner_w]
+        pad = (inner_w - len(display_pos)) // 2
+        for ci, ch in enumerate(display_pos):
+            grid[py + 1][px + 1 + pad + ci] = ch
+
+        # Line 2: keycode name
+        display_kc = kc_name[:inner_w]
+        pad = (inner_w - len(display_kc)) // 2
+        for ci, ch in enumerate(display_kc):
+            grid[py + 2][px + 1 + pad + ci] = ch
+
+    header = f"  Layer {layer_num} — position map"
+    lines = [header, "  " + "=" * (grid_w - 2)]
+    for row in grid:
+        line = "".join(row).rstrip()
+        if line:
+            lines.append(line)
+    return "\n".join(lines)
+
+
 def render_all_layers(
     keys: list[Key],
     keymap: list[list[list[int]]],

@@ -106,6 +106,15 @@ class VialKeyboard:
         resp = self._send([CMD_DYNAMIC_KEYMAP_GET_KEYCODE, layer, row, col])
         return (resp[4] << 8) | resp[5]
 
+    def set_keycode(self, layer: int, row: int, col: int, keycode: int) -> None:
+        """Set a single keycode in the dynamic keymap."""
+        self._send([
+            CMD_DYNAMIC_KEYMAP_SET_KEYCODE,
+            layer, row, col,
+            (keycode >> 8) & 0xFF,
+            keycode & 0xFF,
+        ])
+
     def get_keymap(self, rows: int, cols: int, layers: int) -> list[list[list[int]]]:
         """Read the entire dynamic keymap using individual keycode reads.
 
