@@ -102,11 +102,20 @@ def make_handler(keymap_data: dict):
 
 def serve(keymap_data: dict, port: int = 8378):
     """Start the web server."""
+    import threading
+    import time
+
     handler = make_handler(keymap_data)
     server = HTTPServer(("127.0.0.1", port), handler)
     print(f"  Open http://localhost:{port} in your browser")
+    print(f"  Press Ctrl+C to stop.")
+
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
     try:
-        server.serve_forever()
+        while True:
+            time.sleep(0.5)
     except KeyboardInterrupt:
         print("\nShutting down.")
+        server.shutdown()
         server.server_close()
